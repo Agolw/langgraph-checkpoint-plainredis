@@ -16,7 +16,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
-from langgraph_checkpoint_plainredis import AsyncRedisSaver
+from langgraph_checkpoint_plainredis import AsyncRedisSaver, RedisSaver
 
 DEFAULT_TEST_URL = "redis://127.0.0.1:6379/15"
 
@@ -45,10 +45,18 @@ def prefix() -> str:
 
 
 async def purge(saver: AsyncRedisSaver, prefix: str) -> int:
-    """Delete every key of the test namespace."""
+    """Delete every key of the test namespace (async client)."""
     keys = [key async for key in saver.client.scan_iter(match=f"{prefix}:*", count=500)]
     if keys:
         await saver.client.delete(*keys)
+    return len(keys)
+
+
+def purge_sync(saver: RedisSaver, prefix: str) -> int:
+    """Delete every key of the test namespace (blocking client)."""
+    keys = list(saver.client.scan_iter(match=f"{prefix}:*", count=500))
+    if keys:
+        saver.client.delete(*keys)
     return len(keys)
 
 
@@ -80,3 +88,34 @@ async def make_saver(redis_url: str, prefix: str):
         for instance in created:
             await purge(instance, prefix)
             await instance.aclose()
+
+
+@pytest.fixture
+def sync_saver(redis_url: str, prefix: str):
+    """Blocking saver (RedisSaver) on the same throwaway namespace."""
+    instance = RedisSaver(url=redis_url, prefix=prefix)
+    try:
+        yield instance
+    finally:
+        purge_sync(instance, prefix)
+        instance.close()
+
+
+@pytest.fixture
+def make_sync_saver(redis_url: str, prefix: str):
+    """Factory for extra blocking savers (e.g. simulate a restart)."""
+    created: list[RedisSaver] = []
+
+    def _factory(**kwargs) -> RedisSaver:
+        instance = RedisSaver(
+            url=redis_url, prefix=kwargs.pop("prefix", prefix), **kwargs
+        )
+        created.append(instance)
+        return instance
+
+    try:
+        yield _factory
+    finally:
+        for instance in created:
+            purge_sync(instance, prefix)
+            instance.close()

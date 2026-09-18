@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "langgraph-checkpoint-plainredis"
 version = "0.1.0"
-description = "LangGraph async checkpoint saver on plain Redis - no RedisJSON / RediSearch modules required (works on Redis 5+)"
+description = "LangGraph checkpoint savers on plain Redis (sync + async) - no RedisJSON / RediSearch modules required, works on Redis 5+"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

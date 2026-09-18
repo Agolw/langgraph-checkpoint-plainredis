@@ -7,13 +7,14 @@
 
 > English: [README.en.md](README.en.md)
 
-**基于「裸 Redis」的 LangGraph 异步 checkpointer —— 不需要 RedisJSON、不需要 RediSearch，Redis 5.0+ 即可运行。**
+**基于「裸 Redis」的 LangGraph checkpointer（异步 + 同步两个类）—— 不需要 RedisJSON、不需要 RediSearch，Redis 5.0+ 即可运行。**
 
 用它可以把 LangGraph Agent 的状态（多会话 thread、checkpoint、pending writes、时间旅行）持久化到
 一个**只提供核心命令集**的 Redis 里：不装模块、不上 Redis Stack、不要求 Redis 8。
 
 ```python
-from langgraph_checkpoint_plainredis import AsyncRedisSaver
+from langgraph_checkpoint_plainredis import AsyncRedisSaver   # graph.ainvoke()
+from langgraph_checkpoint_plainredis import RedisSaver        # graph.invoke()
 
 saver = AsyncRedisSaver(url="redis://127.0.0.1:6379/0", ttl=7 * 24 * 3600)
 graph = builder.compile(checkpointer=saver)
@@ -45,7 +46,7 @@ await graph.ainvoke(state, {"configurable": {"thread_id": "user-42:session-7"}})
 | 最低 Redis | **5.0**（RESP2） | Redis Stack，或 Redis 8.0+ |
 | Python 依赖 | `redis`、`langgraph-checkpoint` | 还要 `redisvl`、`orjson` |
 | 存储方式 | 核心数据结构 | JSON 文档 + 搜索索引 |
-| 同步 API | 未实现（仅异步） | 两者都有 |
+| 同步 API | 有（`RedisSaver`） | 两者都有 |
 | 客户端侧检索 | 注册表 hash + 时间线 zset | RediSearch 索引 |
 
 > 如果你的 Redis 是 8.0+ 或 Redis Stack，**请优先用官方包**（功能更全）；
@@ -115,8 +116,34 @@ client = aioredis.Redis(host="redis.internal", port=6379, db=2, protocol=2)
 saver = AsyncRedisSaver(client=client, prefix="myapp:agent")
 ```
 
-> 只有**异步**接口：请使用 `ainvoke` / `astream`（以及 `aget_state*`）。
-> 调用同步的 `get_tuple / put / put_writes / list` 会抛出带说明的 `NotImplementedError`。
+同步版一样用（`graph.invoke()` / `stream()` / `get_state()`，不写 `await`）：
+
+```python
+from langgraph_checkpoint_plainredis import RedisSaver
+
+saver = RedisSaver(url="redis://127.0.0.1:6379/0", ttl=7 * 24 * 3600)
+graph = StateGraph(State).add_node("reply", reply).add_edge(START, "reply").compile(
+    checkpointer=saver
+)
+config = {"configurable": {"thread_id": "user-42:session-7"}}
+
+graph.invoke({"messages": [HumanMessage("hello")]}, config)
+state = graph.get_state(config)
+for snapshot in graph.get_state_history(config):   # 同步版历史是普通生成器
+    print(snapshot.config["configurable"]["checkpoint_id"], snapshot.next)
+
+saver.close()   # 收尾关连接
+```
+
+> **两个类，按调用风格选一个**：
+> `AsyncRedisSaver`（`redis.asyncio`，配 `ainvoke` / `astream` / `aget_state*`）和
+> `RedisSaver`（阻塞式 `redis`，配 `invoke` / `stream` / `get_state*`）。
+> 两个类共用**完全相同的 key 布局与语义**（同一个 thread 可以由二者混着读写，测试里有专项用例），
+> 用错了会直接抛出指明"改用另一个类"的 `NotImplementedError`。
+>
+> ⚠️ 类名与**官方包**、**官方文档 DIY 示例**同名（都叫 `AsyncRedisSaver`），但 **import 路径不同**：
+> 本包是 `from langgraph_checkpoint_plainredis import AsyncRedisSaver`，官方是 `langgraph.checkpoint.redis`——
+> 两个都装了时注意别引错。
 
 ## 数据是怎么存的
 
@@ -155,7 +182,18 @@ if keys:
 
 ## API
 
-`AsyncRedisSaver` 实现 `BaseCheckpointSaver` 的异步接口：
+两个类实现同一套契约，只是一个 async 一个 sync：
+
+| 能力 | `AsyncRedisSaver` | `RedisSaver` | 说明 |
+|:--|:--|:--|:--|
+| 读单个存档 | `aget_tuple(config)` | `get_tuple(config)` | 不指定 `checkpoint_id` 就是最新 |
+| 列存档 | `alist(...)` | `list(...)` | `config=None` 时遍历全部 thread/namespace |
+| 写存档 | `aput(...)` | `put(...)` | 写 checkpoint + 对应 channel blob |
+| 写中间写入 | `aput_writes(...)` | `put_writes(...)` | 按 `(task_id, channel)` 幂等 |
+| 删线程 | `adelete_thread(id)` | `delete_thread(id)` | 精确删除 checkpoint/blob/writes/时间线/注册表项 |
+| 关连接 | `aclose()` | `close()` | 进程退出时调用 |
+
+未实现的那一侧（如 `RedisSaver.aget_tuple`）会抛 `NotImplementedError`，并把该用哪个类写在错误信息里。
 
 | 方法 | 说明 |
 |:--|:--|
@@ -191,7 +229,7 @@ if keys:
 
 ## 已知限制与 Roadmap
 
-* **仅异步**（如上）。
+* **两个类分开（同步 / 异步）**，各自只实现一侧接口；用错了错误信息会指向另一个类。
 * 列表查询靠注册表 hash，而不是服务端索引：`alist(None)` 的代价随**线程数量**线性增长（而非随数据量）。
   按单个线程查询是 `O(log n)`。
 * 回读一个 checkpoint 用一次 `MGET` 取全部 blob（不是每个 channel 一次往返）。
@@ -230,7 +268,9 @@ pytest -v --redis-url=redis://127.0.0.1:6379/15
 PLAINREDIS_TEST_URL=redis://127.0.0.1:6379/15 pytest -v
 
 # 4) 跑示例
-python examples/basic.py         # 可用 PLAINREDIS_URL 覆盖默认 redis://127.0.0.1:6379/0
+python examples/basic.py         # 异步版（AsyncRedisSaver + ainvoke）
+python examples/basic_sync.py    # 同步版（RedisSaver + invoke），同一个 key 布局
+# 两者都可用 PLAINREDIS_URL 覆盖默认 redis://127.0.0.1:6379/0
 ```
 
 测试默认使用 **db 15** + 每个用例随机 key 前缀，跑完自行清理，因此可以安全地指向共享的开发实例。

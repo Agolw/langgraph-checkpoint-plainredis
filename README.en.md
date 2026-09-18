@@ -7,14 +7,15 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](#compatibility)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**LangGraph async checkpoint saver on plain Redis — no RedisJSON, no RediSearch, works on Redis 5.0+.**
+**LangGraph checkpoint savers on plain Redis (sync + async) — no RedisJSON, no RediSearch, works on Redis 5.0+.**
 
 Persist LangGraph agent state (threads, checkpoints, pending writes, time travel)
 in a Redis that only offers the core command set: no modules, no Redis Stack, no
 Redis 8 requirement.
 
 ```python
-from langgraph_checkpoint_plainredis import AsyncRedisSaver
+from langgraph_checkpoint_plainredis import AsyncRedisSaver   # for graph.ainvoke()
+from langgraph_checkpoint_plainredis import RedisSaver        # for graph.invoke()
 
 saver = AsyncRedisSaver(url="redis://127.0.0.1:6379/0", ttl=7 * 24 * 3600)
 graph = builder.compile(checkpointer=saver)
@@ -49,7 +50,7 @@ data structures** (strings, hashes, sorted sets).
 | Minimum Redis | **5.0** (RESP2) | Redis Stack, or Redis 8.0+ |
 | Python dependencies | `redis`, `langgraph-checkpoint` | `redis`, `redisvl`, `orjson`, `langgraph-checkpoint` |
 | Storage backend | core data structures | JSON documents + search indexes |
-| Sync API | not implemented (async only) | both |
+| Sync API | `RedisSaver` | both |
 | Client-side search | registry hash + timeline zset | RediSearch indexes |
 
 If your Redis is 8.0+ (or Redis Stack), use the official package — it is more
@@ -161,20 +162,24 @@ channels. Timeline scores make "latest checkpoint" and "checkpoints before X"
 
 ## API
 
-`AsyncRedisSaver` implements the async `BaseCheckpointSaver` surface:
+Two classes implement the same contract - one async, one sync:
 
-| Method | Notes |
-|:--|:--|
-| `aget_tuple(config)` | latest checkpoint, or the one pinned by `checkpoint_id` |
-| `alist(config, *, filter, before, limit)` | newest first; `config=None` walks every thread/namespace |
-| `aput(config, checkpoint, metadata, new_versions)` | writes the checkpoint + channel blobs |
-| `aput_writes(config, writes, task_id, task_path)` | idempotent per `(task_id, channel)`, like `InMemorySaver` |
-| `adelete_thread(thread_id)` | removes checkpoints, blobs, writes, timeline and registry entry |
-| `aclose()` | closes the Redis client |
+| Capability | `AsyncRedisSaver` | `RedisSaver` | Notes |
+|:--|:--|:--|:--|
+| read one checkpoint | `aget_tuple(config)` | `get_tuple(config)` | latest unless `checkpoint_id` is pinned |
+| list checkpoints | `alist(...)` | `list(...)` | `config=None` walks every thread/namespace |
+| write a checkpoint | `aput(...)` | `put(...)` | checkpoint + its channel blobs |
+| write pending writes | `aput_writes(...)` | `put_writes(...)` | idempotent per `(task_id, channel)` |
+| delete a thread | `adelete_thread(id)` | `delete_thread(id)` | exact keys: checkpoints/blobs/writes/timeline/registry |
+| close | `aclose()` | `close()` | call it on shutdown |
 
-Sync methods (`get_tuple`, `put`, `put_writes`, `list`) raise
-`NotImplementedError` with an actionable message — use `ainvoke` / `astream`
-(or `aget_state*`).
+The unused side (e.g. `RedisSaver.aget_tuple`) raises `NotImplementedError` and names
+the class you should use instead.
+
+> ⚠️ The class name matches the **official package** and the **official docs' DIY
+example** (all three call it `AsyncRedisSaver`), but the **import path differs**: here it is
+`from langgraph_checkpoint_plainredis import AsyncRedisSaver`, the official one lives under
+`langgraph.checkpoint.redis` — do not mix them up when both are installed.
 
 ## Semantics and guarantees
 
@@ -207,7 +212,8 @@ Sync methods (`get_tuple`, `put`, `put_writes`, `list`) raise
 
 ## Limitations and roadmap
 
-* **Async only** (by design, see above).
+* **Two separate classes** (sync / async), each implementing only its own side of the
+  interface; using the wrong one points you at the other class.
 * Listing is driven by a registry hash rather than server-side indexes, so
   `alist(None)` cost grows linearly with the number of *threads* (not with the
   size of the data). Per-thread listing is `O(log n)`.
@@ -256,7 +262,9 @@ pytest -v --redis-url=redis://127.0.0.1:6379/15
 PLAINREDIS_TEST_URL=redis://127.0.0.1:6379/15 pytest -v
 
 # 4) run the example
-python examples/basic.py         # PLAINREDIS_URL overrides the default
+python examples/basic.py         # async (AsyncRedisSaver + ainvoke)
+python examples/basic_sync.py    # sync  (RedisSaver + invoke), same key layout
+# PLAINREDIS_URL overrides the default redis://127.0.0.1:6379/0 for both
 ```
 
 The suite defaults to database 15 and a random key prefix per test, then removes
