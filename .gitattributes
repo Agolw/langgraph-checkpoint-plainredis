@@ -1,0 +1,12 @@
+# 统一 LF：库里 + 工作区都用 LF（纯 Python 包，主要在 Linux/WSL 侧维护）喵~
+# 目的：不依赖本机 core.autocrlf（Git for Windows 常设为 true，会把工作区写成 CRLF），
+# 避免文件在 LF/CRLF 之间来回跳导致"整个文件都变了"的假 diff。喵~
+* text=auto eol=lf
+
+# 二进制：不做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
+*.whl binary

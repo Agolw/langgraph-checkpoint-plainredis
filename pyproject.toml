@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langgraph-checkpoint-plainredis"
+version = "0.1.0"
+description = "LangGraph async checkpoint saver on plain Redis - no RedisJSON / RediSearch modules required (works on Redis 5+)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Agolw" }]
+keywords = [
+  "langgraph",
+  "langchain",
+  "checkpoint",
+  "persistence",
+  "redis",
+  "agent",
+  "memory",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+dependencies = [
+  "langgraph-checkpoint>=4.1,<5",
+  "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  # the end-to-end tests and examples drive a real graph (not just the base API)
+  "langgraph>=1.0,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Agolw/langgraph-checkpoint-plainredis"
+Repository = "https://github.com/Agolw/langgraph-checkpoint-plainredis"
+Issues = "https://github.com/Agolw/langgraph-checkpoint-plainredis/issues"
+Changelog = "https://github.com/Agolw/langgraph-checkpoint-plainredis/releases"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langgraph_checkpoint_plainredis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error::DeprecationWarning:langgraph_checkpoint_plainredis.*"]
